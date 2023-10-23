@@ -14,9 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -54,6 +55,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_times: [0; MAX_SYSCALL_NUM],
+            first_running_timestamp: 0
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -125,6 +128,12 @@ impl TaskManager {
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            
+            // chap3(lab1) record the first running timestamp of tasks
+            if inner.tasks[next].first_running_timestamp == 0 {
+                inner.tasks[next].first_running_timestamp = get_time_ms();
+            }
+            
             drop(inner);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
@@ -135,6 +144,29 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// chap3(lab1) To record the counts of syscall
+    pub fn increase_counts_of_syscall(&self, syscall_id: usize) {
+        if syscall_id > MAX_SYSCALL_NUM {
+            panic!("Unsupported syscall_id : {}", syscall_id);
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
+
+    /// chap3(lab1) To get the first running timestamp of current task
+    pub fn get_current_task_first_running_timestamp(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.tasks[inner.current_task].first_running_timestamp
+    }
+
+    /// chap3(lab1) To get the syscall counts of current task
+    pub fn get_current_task_counts_of_syscall(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        inner.tasks[inner.current_task].syscall_times
+    }
+
 }
 
 /// Run the first task in task list.
